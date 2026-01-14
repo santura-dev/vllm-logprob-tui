@@ -1,84 +1,42 @@
-# vLLM TUI Chat Interface
+# vllm-logprob-tui
 
-A beautiful terminal-based chat interface for interacting with vLLM inference servers. Features real-time streaming, system monitoring, and educational token probability visualization.
+![Go](https://img.shields.io/badge/go-%2300ADD8.svg?style=flat&logo=go&logoColor=white) ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg) ![vLLM](https://img.shields.io/badge/vLLM-compatible-green)
+
+Terminal UI for vLLM logprobs, token statistics, and inference metrics in real-time.
+
+## The problem
+
+vLLM exposes logprob data through its API. Reading raw JSON from `curl` is not useful when you are trying to understand why a model generated bad output. You need token probabilities, alternatives the model considered, batch statistics, and per-request breakdowns, and you need them updating live.
+
+## The idea
+
+Connect to a vLLM server and display all of that in a navigable terminal interface. Useful for diagnosing model confidence (why does the model say "port 5432" with 0.3 probability?), understanding batch behavior under load, and monitoring inference performance over time.
 
 ## Features
 
-- **Interactive Chat**: Stream real-time responses from vLLM models
-- **System Monitoring**: Live GPU/CPU/RAM stats
-- **Token Probabilities**: Educational visualization of token selection
-- **Response Analysis**: Generation time and finish reason tracking
-- **Scrollable Interface**: Full navigation with keyboard shortcuts
+- **real-time token probabilities**: top-k tokens and probabilities per generation step
+- **batch statistics**: throughput, latency, queue depth, active requests
+- **per-request breakdown**: token counts, time to first token, generation speed
+- **alternative tokens**: what else the model considered, with probabilities. Useful for spotting uncertainty.
 
-## Screenshots
-
-[Add screenshots here]
-
-## Prerequisites
-
-- Go 1.19+
-- vLLM server running locally (default: http://localhost:8000)
-
-## Installation
+## Run
 
 ```bash
-git clone https://github.com/yourusername/vllm-tui.git
-cd vllm-tui
-go mod tidy
-go build -o vllm-tui
+go run main.go --server http://localhost:8000
 ```
 
-## Usage
+## Config
 
-1. Start your vLLM server:
 ```bash
-python -m vllm.entrypoints.openai.api_server --model microsoft/phi-1_5 --host 0.0.0.0 --port 8000
+VLLM_SERVER=http://localhost:8000
+REFRESH_INTERVAL=1s
 ```
 
-2. Run the TUI:
-```bash
-./vllm-tui
-```
+## Related
 
-## Controls
-
-- **Enter**: Send message
-- **Tab**: Toggle between input and scrolling
-- **Ctrl+C**: Exit
-- **Ctrl+L**: Toggle token probabilities panel
-
-## Architecture
-
-Built with:
-- [Bubbletea](https://github.com/charmbracelet/bubbletea) - Terminal UI framework
-- [Bubbles](https://github.com/charmbracelet/bubbles) - UI components
-- [Lipgloss](https://github.com/charmbracelet/lipgloss) - Styling
-- [gopsutil](https://github.com/shirou/gopsutil) - System monitoring
-
-## Configuration
-
-The TUI connects to `http://localhost:8000` by default. Modify the server URL in the code for different endpoints.
-
-## Educational Features
-
-- **Token Probabilities**: See why the model chose specific tokens
-- **Generation Stats**: Understand response timing and completion reasons
-- **System Metrics**: Learn about hardware utilization during inference
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+- [inference-operator-tui](https://github.com/santura-dev/inference-operator-tui) - TUI for managing the K8s operator
+- [kubectl-tui](https://github.com/santura-dev/kubectl-tui) - general Kubernetes TUI
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Related Projects
-
-- [go-kubectl-tui](https://github.com/yourusername/kubectl-tui) - kubectl interface
-- [local-inference-operator](https://github.com/yourusername/local-inference-operator) - K8s operator
-- [operator-tui](https://github.com/yourusername/operator-tui) - Operator management interface
+MIT
