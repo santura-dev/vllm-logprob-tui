@@ -1,0 +1,25 @@
+# Binary
+vllm-tui
+vllm-logprob-tui
+dist/
+
+# Build
+*.exe
+*.test
+*.out
+
+# Go
+vendor/
+
+# Env
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
