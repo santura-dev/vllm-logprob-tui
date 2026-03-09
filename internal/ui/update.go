@@ -86,7 +86,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.batchMetrics = msg.metrics
 		m.metricsOK = msg.metricsOK
 		m.viewport.SetContent(m.renderContent())
-		return m, tickStats(m.cfg.MetricsInterval)
+		return m, nil
 
 	case tickStatsMsg:
 		return m, tea.Batch(fetchStatsCmd(m.client), tickStats(m.cfg.MetricsInterval))
@@ -107,10 +107,11 @@ func queryCmd(client *vllm.Client, cfg *config.Config, query string) tea.Cmd {
 		defer cancel()
 
 		req := vllm.CompletionRequest{
-			Model:     cfg.Model,
-			Prompt:    query,
-			MaxTokens: cfg.MaxTokens,
-			Logprobs:  cfg.TopK,
+			Model:         cfg.Model,
+			Prompt:        query,
+			MaxTokens:     cfg.MaxTokens,
+			Logprobs:      cfg.TopK,
+			StreamOptions: &vllm.StreamOptions{IncludeUsage: true},
 		}
 		res, err := client.StreamCompletion(ctx, req, nil)
 		return responseMsg{result: res, err: err}

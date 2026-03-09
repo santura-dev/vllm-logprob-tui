@@ -73,6 +73,10 @@ func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, on
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			return nil, fmt.Errorf("decode stream chunk: %w", err)
 		}
+		if chunk.Usage != nil {
+			result.Usage = *chunk.Usage
+			continue
+		}
 		if len(chunk.Choices) == 0 {
 			continue
 		}
@@ -111,9 +115,6 @@ func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, on
 	result.TTFT = ttft.Seconds()
 	result.TotalTime = time.Since(start).Seconds()
 	result.TokensPerSec = float64(len(result.TokenLogprobs)) / result.TotalTime
-	if usage, err := c.fetchUsage(ctx, req); err == nil {
-		result.Usage = usage
-	}
 	return result, nil
 }
 
@@ -151,42 +152,6 @@ func parseLogprobValue(raw json.RawMessage) (float64, bool) {
 		}
 	}
 	return 0, false
-}
-
-// fetchUsage reads token accounting from a non-streaming completion with
-// max_tokens=1. vLLM does not reliably include usage in streamed completions.
-func (c *Client) fetchUsage(ctx context.Context, req CompletionRequest) (Usage, error) {
-	body, err := json.Marshal(CompletionRequest{
-		Model:     req.Model,
-		Prompt:    req.Prompt,
-		MaxTokens: 1,
-		Stream:    false,
-	})
-	if err != nil {
-		return Usage{}, err
-	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/completions", bytes.NewReader(body))
-	if err != nil {
-		return Usage{}, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return Usage{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return Usage{}, fmt.Errorf("usage probe returned %s", resp.Status)
-	}
-
-	var out struct {
-		Usage Usage `json:"usage"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return Usage{}, err
-	}
-	return out.Usage, nil
 }
 
 // FetchMetrics scrapes the four batch gauges from the Prometheus endpoint.

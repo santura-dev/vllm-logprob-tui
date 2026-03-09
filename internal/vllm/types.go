@@ -4,16 +4,22 @@ import "encoding/json"
 
 // CompletionRequest is the payload for /v1/completions.
 type CompletionRequest struct {
-	Model     string `json:"model"`
-	Prompt    string `json:"prompt"`
-	MaxTokens int    `json:"max_tokens"`
-	Logprobs  int    `json:"logprobs"`
-	Stream    bool   `json:"stream"`
+	Model         string         `json:"model"`
+	Prompt        string         `json:"prompt"`
+	MaxTokens     int            `json:"max_tokens"`
+	Logprobs      int            `json:"logprobs"`
+	Stream        bool           `json:"stream"`
+	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
+}
+
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // StreamingChunk is one SSE data payload from a streamed completion.
 type StreamingChunk struct {
 	Choices []chunkChoice `json:"choices"`
+	Usage   *Usage        `json:"usage"`
 }
 
 type chunkChoice struct {
