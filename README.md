@@ -22,15 +22,31 @@ Connect to a vLLM server and display all of that in a navigable terminal interfa
 ## Run
 
 ```bash
-go run main.go --server http://localhost:8000
+go run ./cmd/vllm-tui --server http://localhost:8000
+```
+
+or build:
+
+```bash
+go build -o vllm-tui ./cmd/vllm-tui
+./vllm-tui --server http://localhost:8000
 ```
 
 ## Config
 
-```bash
-VLLM_SERVER=http://localhost:8000
-REFRESH_INTERVAL=1s
-```
+| Flag | Env | Default | Description |
+|---|---|---|---|
+| `--server` | `VLLM_SERVER` | `http://localhost:8000` | vLLM server base URL |
+| `--model` | `VLLM_MODEL` | `facebook/opt-125m` | model name sent to the API |
+| `--max-tokens` | — | `100` | max tokens to generate |
+| `--top-k` | — | `5` | top-k logprobs to request per token |
+| `--metrics-interval` | — | `1s` | system/vLLM metrics refresh interval |
+
+## Keys
+
+- `enter` — send query
+- `tab` — toggle between prompt and output scrolling
+- `ctrl+c` / `esc` — quit
 
 ## Related
 

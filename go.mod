@@ -1,4 +1,4 @@
-module vllm-tui
+module github.com/santura-dev/vllm-logprob-tui
 
 go 1.25.5
 
