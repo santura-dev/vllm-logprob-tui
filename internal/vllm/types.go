@@ -12,6 +12,7 @@ type CompletionRequest struct {
 	StreamOptions *StreamOptions `json:"stream_options,omitempty"`
 }
 
+// StreamOptions asks the server to include token usage in the stream.
 type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
 }
@@ -39,10 +40,23 @@ type Usage struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
-// TokenProb is one generated token with its log probability.
+// Alt is one alternative token the model considered.
+type Alt struct {
+	Token   string
+	LogProb float64
+}
+
+// TokenProb is one generated token with its log probability and top-k alternatives.
 type TokenProb struct {
 	Token   string
 	LogProb float64
+	Alts    []Alt
+}
+
+// StreamEvent is emitted per streamed text delta.
+type StreamEvent struct {
+	Text  string
+	Token *TokenProb
 }
 
 // CompletionResult is the accumulated outcome of a streamed completion.

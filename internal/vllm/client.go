@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,10 +27,13 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-// StreamCompletion sends a streaming completion request and calls onChunk for
-// each delta. It returns the accumulated result. onChunk is optional (may be nil).
-func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, onChunk func(text string)) (*CompletionResult, error) {
+// StreamCompletion sends a streaming completion request. For each text delta it
+// calls onEvent with the text and (when available) the token's logprob data.
+func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, onEvent func(StreamEvent)) (*CompletionResult, error) {
 	req.Stream = true
+	if req.StreamOptions == nil {
+		req.StreamOptions = &StreamOptions{IncludeUsage: true}
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -73,6 +77,7 @@ func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, on
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			return nil, fmt.Errorf("decode stream chunk: %w", err)
 		}
+		// usage-only final chunk has no choices
 		if chunk.Usage != nil {
 			result.Usage = *chunk.Usage
 			continue
@@ -82,12 +87,11 @@ func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, on
 		}
 		choice := chunk.Choices[0]
 
+		var tp *TokenProb
 		if choice.Logprobs != nil && len(choice.Logprobs.TopLogprobs) > 0 && choice.Text != "" {
 			// one top_logprobs entry per token in this chunk's text
-			alternatives := choice.Logprobs.TopLogprobs[0]
-			if lp, ok := extractLogprob(alternatives, choice.Text); ok {
-				result.TokenLogprobs = append(result.TokenLogprobs, TokenProb{Token: choice.Text, LogProb: lp})
-			}
+			tp = parseTopLogprobs(choice.Logprobs.TopLogprobs[0], choice.Text)
+			result.TokenLogprobs = append(result.TokenLogprobs, *tp)
 		}
 
 		if choice.Text != "" {
@@ -96,8 +100,8 @@ func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, on
 				firstToken = true
 			}
 			result.Text += choice.Text
-			if onChunk != nil {
-				onChunk(choice.Text)
+			if onEvent != nil {
+				onEvent(StreamEvent{Text: choice.Text, Token: tp})
 			}
 		}
 
@@ -114,24 +118,62 @@ func (c *Client) StreamCompletion(ctx context.Context, req CompletionRequest, on
 
 	result.TTFT = ttft.Seconds()
 	result.TotalTime = time.Since(start).Seconds()
-	result.TokensPerSec = float64(len(result.TokenLogprobs)) / result.TotalTime
+	tokens := result.Usage.CompletionTokens
+	if tokens <= 0 {
+		tokens = len(result.TokenLogprobs)
+	}
+	result.TokensPerSec = float64(tokens) / result.TotalTime
 	return result, nil
 }
 
-// extractLogprob finds the logprob for the chosen token, accepting float values
-// or {"logprob": ...}/{"logprog": ...} objects, and falls back to any entry.
-func extractLogprob(alternatives map[string]json.RawMessage, token string) (float64, bool) {
-	for _, key := range []string{token, strings.TrimSpace(token)} {
-		if raw, ok := alternatives[key]; ok {
-			return parseLogprobValue(raw)
+// parseTopLogprobs builds the chosen token's entry from one top_logprobs map.
+// The chosen token is usually a key; if not (tokenizer mismatch), the closest
+// approximation is the highest-probability entry rather than a random one.
+func parseTopLogprobs(alternatives map[string]json.RawMessage, token string) *TokenProb {
+	tp := &TokenProb{Token: token}
+
+	for tok, raw := range alternatives {
+		lp, ok := parseLogprobValue(raw)
+		if !ok {
+			continue
+		}
+		if tok == token || tok == strings.TrimSpace(token) {
+			tp.LogProb = lp
+			continue
+		}
+		tp.Alts = append(tp.Alts, Alt{Token: tok, LogProb: lp})
+	}
+	sortAlts(tp.Alts)
+
+	if tp.LogProb == 0 {
+		// chosen token not among alternatives: use the top entry as the
+		// closest available estimate, and don't duplicate it in the list
+		if len(tp.Alts) > 0 {
+			tp.LogProb = tp.Alts[0].LogProb
+			tp.Alts = tp.Alts[1:]
 		}
 	}
-	for _, raw := range alternatives {
-		if lp, ok := parseLogprobValue(raw); ok {
-			return lp, true
+	return tp
+}
+
+func sortAlts(alts []Alt) {
+	for i := 1; i < len(alts); i++ {
+		for j := i; j > 0 && alts[j].LogProb > alts[j-1].LogProb; j-- {
+			alts[j], alts[j-1] = alts[j-1], alts[j]
 		}
 	}
-	return 0, false
+}
+
+// Perplexity returns exp(mean(-logprob)) over the generated tokens.
+func Perplexity(tokens []TokenProb) float64 {
+	if len(tokens) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, tp := range tokens {
+		sum += tp.LogProb
+	}
+	return math.Exp(-sum / float64(len(tokens)))
 }
 
 func parseLogprobValue(raw json.RawMessage) (float64, bool) {

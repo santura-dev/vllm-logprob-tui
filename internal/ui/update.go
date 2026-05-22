@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/santura-dev/vllm-logprob-tui/internal/config"
@@ -17,6 +18,12 @@ import (
 type responseMsg struct {
 	result *vllm.CompletionResult
 	err    error
+}
+
+// chunkMsg carries one streamed delta while generation is in flight.
+type chunkMsg struct {
+	text  string
+	token *vllm.TokenProb
 }
 
 // statsMsg carries a system + batch metrics snapshot.
@@ -39,6 +46,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.renderContent())
 		return m, nil
 
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
@@ -51,24 +63,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.Blur()
 			}
 			return m, nil
+		case "up", "down":
+			if m.inputFocused && !m.loading {
+				m.browseHistory(msg.String() == "up")
+				return m, nil
+			}
 		case "enter":
 			if m.inputFocused && !m.loading {
 				query := strings.TrimSpace(m.textInput.Value())
 				if query == "" {
 					return m, nil
 				}
+				m.pushHistory(query)
 				m.loading = true
-				m.response = "Generating..."
+				m.response = ""
+				m.logprobs = nil
 				m.err = nil
+				m.finishReason = ""
 				m.viewport.SetContent(m.renderContent())
-				return m, queryCmd(m.client, m.cfg, query)
+				m.activeStream = newStream()
+				produce := produceCmd(m.client, m.cfg, query, m.activeStream)
+				return m, tea.Batch(produce, m.activeStream.listen(), m.spinner.Tick)
 			}
 		}
 
+	case chunkMsg:
+		if m.loading {
+			m.response += msg.text
+			if msg.token != nil {
+				m.logprobs = append(m.logprobs, *msg.token)
+			}
+			m.viewport.SetContent(m.renderContent())
+			m.viewport.GotoBottom()
+		}
+		return m, m.activeStream.listen()
+
 	case responseMsg:
 		m.loading = false
+		m.activeStream = nil
 		if msg.err != nil {
 			m.err = msg.err
+			m.serverUp = false
 		} else {
 			m.response = msg.result.Text
 			m.logprobs = msg.result.TokenLogprobs
@@ -77,6 +112,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tokensPerSec = msg.result.TokensPerSec
 			m.finishReason = msg.result.FinishReason
 			m.usage = msg.result.Usage
+			m.serverUp = true
 		}
 		m.viewport.SetContent(m.renderContent())
 		return m, nil
@@ -101,28 +137,101 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func queryCmd(client *vllm.Client, cfg *config.Config, query string) tea.Cmd {
+func (m *Model) pushHistory(q string) {
+	if len(m.history) == 0 || m.history[len(m.history)-1] != q {
+		m.history = append(m.history, q)
+	}
+	m.historyIdx = -1
+}
+
+func (m *Model) browseHistory(older bool) {
+	if len(m.history) == 0 {
+		return
+	}
+	if older {
+		if m.historyIdx == -1 {
+			m.historyIdx = len(m.history) - 1
+		} else if m.historyIdx > 0 {
+			m.historyIdx--
+		}
+	} else {
+		if m.historyIdx == -1 {
+			return
+		}
+		m.historyIdx++
+		if m.historyIdx >= len(m.history) {
+			m.historyIdx = -1
+			m.textInput.SetValue("")
+			return
+		}
+	}
+	m.textInput.SetValue(m.history[m.historyIdx])
+}
+
+// activeStream carries chunks from the producer goroutine into Update.
+// A tea.Cmd returns exactly one Msg, so a channel + re-armed listener is the
+// standard pattern for continuous streams.
+type streamChan struct {
+	ch     chan tea.Msg
+	closed bool
+}
+
+func newStream() *streamChan {
+	return &streamChan{ch: make(chan tea.Msg, 256)}
+}
+
+func (s *streamChan) send(msg tea.Msg) {
+	if !s.closed {
+		s.ch <- msg
+	}
+}
+
+func (s *streamChan) close() {
+	s.closed = true
+}
+
+// listen returns the next message; nil when the stream is closed.
+func (s *streamChan) listen() tea.Cmd {
 	return func() tea.Msg {
+		msg, ok := <-s.ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+func produceCmd(client *vllm.Client, cfg *config.Config, query string, s *streamChan) tea.Cmd {
+	return func() tea.Msg {
+		defer s.close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 
 		req := vllm.CompletionRequest{
-			Model:         cfg.Model,
-			Prompt:        query,
-			MaxTokens:     cfg.MaxTokens,
-			Logprobs:      cfg.TopK,
-			StreamOptions: &vllm.StreamOptions{IncludeUsage: true},
+			Model:     cfg.Model,
+			Prompt:    query,
+			MaxTokens: cfg.MaxTokens,
+			Logprobs:  cfg.TopK,
 		}
-		res, err := client.StreamCompletion(ctx, req, nil)
+		res, err := client.StreamCompletion(ctx, req, func(ev vllm.StreamEvent) {
+			s.send(chunkMsg{text: ev.Text, token: ev.Token})
+		})
 		return responseMsg{result: res, err: err}
 	}
 }
 
 func fetchStatsCmd(client *vllm.Client) tea.Cmd {
 	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
 		stats := system.Collect()
-		metrics, err := client.FetchMetrics(context.Background())
-		return statsMsg{system: stats, metrics: metrics, metricsOK: err == nil}
+		metrics, err := client.FetchMetrics(ctx)
+		return statsMsg{
+			system:    stats,
+			metrics:   metrics,
+			metricsOK: err == nil,
+		}
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/santura-dev/vllm-logprob-tui/internal/vllm"
 )
 
 var (
@@ -17,6 +19,9 @@ var (
 	probHigh = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
 	probMid  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 	probLow  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	headerStyle = lipgloss.NewStyle().Bold(true)
 )
 
 func newViewport(width, height int) viewport.Model {
@@ -29,14 +34,30 @@ func (m Model) View() string {
 	if !m.ready {
 		return "Initializing..."
 	}
-	return m.viewport.View() + "\n" + m.focusHint()
+	return m.viewport.View() + "\n" + m.statusBar()
+}
+
+func (m Model) statusBar() string {
+	server := probLow.Render("● server down")
+	if m.serverUp {
+		server = probHigh.Render("● server up")
+	} else if m.metricsOK {
+		server = probHigh.Render("● server up")
+	}
+
+	parts := []string{server}
+	if m.loading {
+		parts = append(parts, m.spinner.View()+" generating")
+	}
+	parts = append(parts, m.focusHint())
+	return dimStyle.Render(strings.Join(parts, " · "))
 }
 
 func (m Model) focusHint() string {
 	if m.inputFocused {
-		return "tab: scroll output · enter: send · ctrl+c: quit"
+		return "tab: scroll · enter: send · ↑/↓: history · ctrl+c: quit"
 	}
-	return "tab: edit prompt · enter/pgup/pgdn: scroll · ctrl+c: quit"
+	return "tab: edit · enter/pgup/pgdn: scroll · ↑/↓: history · ctrl+c: quit"
 }
 
 func (m *Model) renderContent() string {
@@ -53,27 +74,32 @@ func (m *Model) renderContent() string {
 func (m *Model) renderPrompt() string {
 	focus := ""
 	if !m.inputFocused {
-		focus = " (scrolling — tab to edit)"
+		focus = dimStyle.Render(" (scrolling — tab to edit)")
 	}
-	return fmt.Sprintf("Query:%s\n%s", focus, m.textInput.View())
+	return fmt.Sprintf("%s\n%s", headerStyle.Render("Query"), m.textInput.View()) + focus
 }
 
 func (m *Model) renderResponse() string {
 	if m.err != nil {
-		return fmt.Sprintf("Response:\nerror: %v", m.err)
+		return headerStyle.Render("Response") + fmt.Sprintf("\n%s", probLow.Render("error: "+m.err.Error()))
 	}
-	if m.loading {
-		return "Response:\nGenerating..."
+	if m.loading && m.response == "" {
+		return headerStyle.Render("Response") + "\n" + m.spinner.View() + " waiting for first token..."
 	}
 	if m.response == "" {
-		return "Response:\n(press enter to generate)"
+		return headerStyle.Render("Response") + "\n(press enter to generate)"
 	}
 
 	var b strings.Builder
-	b.WriteString("Response:\n")
+	b.WriteString(headerStyle.Render("Response") + "\n")
 	b.WriteString(m.response)
 	if len(m.logprobs) > 0 {
-		b.WriteString("\n\nToken probabilities:\n")
+		b.WriteString("\n\n" + headerStyle.Render("Token probabilities"))
+		ppl := vllm.Perplexity(m.logprobs)
+		if ppl > 0 {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("  (perplexity %.2f)", ppl)))
+		}
+		b.WriteString("\n")
 		b.WriteString(m.renderLogprobTable())
 	}
 	return b.String()
@@ -85,9 +111,34 @@ func (m *Model) renderLogprobTable() string {
 		p := math.Exp(tp.LogProb)
 		bar := probabilityBar(p)
 		style := probStyle(p)
-		b.WriteString(fmt.Sprintf("  %s %s %.1f%%\n", style.Render(fmt.Sprintf("%-12q", tp.Token)), bar, p*100))
+		b.WriteString(fmt.Sprintf("  %s %s %s\n",
+			style.Render(fmt.Sprintf("%-10s", cleanToken(tp.Token))),
+			bar,
+			style.Render(fmt.Sprintf("%5.1f%%", p*100)),
+		))
+		if len(tp.Alts) > 0 {
+			b.WriteString(dimStyle.Render("           alts: "+renderAlts(tp.Alts)) + "\n")
+		}
 	}
 	return b.String()
+}
+
+func renderAlts(alts []vllm.Alt) string {
+	var parts []string
+	for i, a := range alts {
+		if i >= 3 {
+			break
+		}
+		p := math.Exp(a.LogProb)
+		parts = append(parts, fmt.Sprintf("%s %.0f%%", cleanToken(a.Token), p*100))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// cleanToken renders BPE space/newline markers readably.
+func cleanToken(tok string) string {
+	r := strings.NewReplacer("Ġ", "␣", "Ċ", "⏎", "▁", "␣")
+	return r.Replace(tok)
 }
 
 func probStyle(p float64) lipgloss.Style {
@@ -108,7 +159,7 @@ func probabilityBar(p float64) string {
 
 func (m *Model) renderRequestStats() string {
 	var b strings.Builder
-	b.WriteString("Request:\n")
+	b.WriteString(headerStyle.Render("Request") + "\n")
 	if m.finishReason == "" {
 		b.WriteString("  no request yet")
 		return b.String()
@@ -121,7 +172,7 @@ func (m *Model) renderRequestStats() string {
 
 func (m *Model) renderServerStats() string {
 	var b strings.Builder
-	b.WriteString("Server:\n")
+	b.WriteString(headerStyle.Render("Server") + "\n")
 	b.WriteString(m.systemStats)
 	if m.metricsOK {
 		b.WriteString(fmt.Sprintf("\nvLLM: %d running · %d queued · %d swapped · KV cache %.1f%%",

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
@@ -19,10 +20,22 @@ type Stats struct {
 	RAMPercent float64
 }
 
+var (
+	gpuMu        sync.Mutex
+	gpuAvailable = true // checked once; most hosts never have nvidia-smi
+)
+
 // Collect gathers GPU (via nvidia-smi), CPU, and RAM stats.
-// Missing nvidia-smi is not an error; GPU reports "not available".
+// Missing nvidia-smi is checked once and cached; GPU reports "not available".
 func Collect() Stats {
-	s := Stats{GPU: gpuStats()}
+	s := Stats{GPU: "not available"}
+
+	gpuMu.Lock()
+	hasGPU := gpuAvailable
+	gpuMu.Unlock()
+	if hasGPU {
+		s.GPU = gpuStats()
+	}
 
 	if pct, err := cpu.Percent(0, false); err == nil && len(pct) > 0 {
 		s.CPUPercent = pct[0]
@@ -38,6 +51,9 @@ func Collect() Stats {
 func gpuStats() string {
 	out, err := exec.Command("nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw", "--format=csv,noheader,nounits").Output()
 	if err != nil {
+		gpuMu.Lock()
+		gpuAvailable = false
+		gpuMu.Unlock()
 		return "not available"
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
