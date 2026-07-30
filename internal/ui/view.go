@@ -30,11 +30,36 @@ func newViewport(width, height int) viewport.Model {
 	return vp
 }
 
+// Layout: fixed-height panels (query, request, server) + response panel that
+// takes all remaining terminal lines, scrolling internally. Nothing overflows.
 func (m Model) View() string {
 	if !m.ready {
 		return "Initializing..."
 	}
-	return m.viewport.View() + "\n" + m.statusBar()
+
+	query := boxStyle.Render(m.renderPrompt())
+	request := boxStyle.Render(m.renderRequestStats())
+	server := boxStyle.Render(m.renderServerStats())
+
+	fixed := lipgloss.Height(query) + lipgloss.Height(request) + lipgloss.Height(server)
+	// +3 for borders/padding slack, -1 status bar
+	respHeight := m.viewport.Height - fixed - 2
+	if respHeight < 4 {
+		respHeight = 4
+	}
+
+	respView := m.renderResponsePanel(respHeight)
+	return lipgloss.JoinVertical(lipgloss.Left, query, respView, request, server) + "\n" + m.statusBar()
+}
+
+// renderResponsePanel renders response + logprob table inside its own
+// viewport, height-capped to fit the terminal.
+func (m *Model) renderResponsePanel(height int) string {
+	vp := m.respViewport
+	vp.Height = height
+	vp.Width = m.viewport.Width
+	vp.SetContent(m.renderResponse())
+	return vp.View()
 }
 
 func (m Model) statusBar() string {

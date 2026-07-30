@@ -14,12 +14,13 @@ import (
 
 // Model is the bubbletea application model.
 type Model struct {
-	cfg       *config.Config
-	client    *vllm.Client
-	textInput textinput.Model
-	viewport  viewport.Model
-	spinner   spinner.Model
-	ready     bool
+	cfg          *config.Config
+	client       *vllm.Client
+	textInput    textinput.Model
+	viewport     viewport.Model
+	respViewport viewport.Model
+	spinner      spinner.Model
+	ready        bool
 
 	inputFocused bool
 	loading      bool
@@ -54,11 +55,12 @@ func New(cfg *config.Config) Model {
 	sp.Spinner = spinner.Dot
 
 	return Model{
-		cfg:        cfg,
-		client:     vllm.NewClient(cfg.Server),
-		textInput:  ti,
-		spinner:    sp,
-		historyIdx: -1,
+		cfg:          cfg,
+		client:       vllm.NewClient(cfg.Server),
+		textInput:    ti,
+		spinner:      sp,
+		respViewport: viewport.New(80, 20),
+		historyIdx:   -1,
 	}
 }
 
