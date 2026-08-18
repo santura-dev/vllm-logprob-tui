@@ -4,6 +4,8 @@
 
 Terminal UI for vLLM logprobs, token statistics, and inference metrics in real-time.
 
+![demo](assets/demo.png)
+
 ## The problem
 
 vLLM exposes logprob data through its API. Reading raw JSON from `curl` is not useful when you are trying to understand why a model generated bad output. You need token probabilities, alternatives the model considered, batch statistics, and per-request breakdowns, and you need them updating live.

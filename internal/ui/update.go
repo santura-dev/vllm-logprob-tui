@@ -83,9 +83,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.err = nil
 				m.finishReason = ""
 				m.viewport.SetContent(m.renderContent())
-				if m.cfg.Demo {
-					return m, tea.Batch(demoStream(), m.spinner.Tick)
-				}
 				m.activeStream = newStream()
 				produce := produceCmd(m.client, m.cfg, query, m.activeStream)
 				return m, tea.Batch(produce, m.activeStream.listen(), m.spinner.Tick)
@@ -128,21 +125,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.SetContent(m.renderContent())
 		return m, nil
 
-	case demoChunkMsg:
-		if m.cfg.Demo && m.loading {
-			return m.handleDemoChunk(msg)
-		}
-		return m, nil
-
 	case tickStatsMsg:
-		if m.cfg.Demo {
-			m.systemStats = "GPU: A100 80GB, 97% util, 71°C, 302.5 W\nCPU: 43.2%\nRAM: 51200/81920 MB (62.5%)"
-			m.batchMetrics = vllm.BatchMetrics{Running: 3, Waiting: 7, Swapped: 0, CachePerc: 0.64}
-			m.metricsOK = true
-			m.serverUp = true
-			m.viewport.SetContent(m.renderContent())
-			return m, tickStats(m.cfg.MetricsInterval)
-		}
 		return m, tea.Batch(fetchStatsCmd(m.client), tickStats(m.cfg.MetricsInterval))
 	}
 
